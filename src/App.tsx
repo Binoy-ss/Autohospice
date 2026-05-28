@@ -92,7 +92,7 @@ export default function App() {
         onNavigate={scrollToSection} 
       />
 
-      {/* 2. Hero Cinematic Section (Frame-by-frame scroll sequence) */}
+      {/* 2. Hero Cinematic Section (Frame Sequence) */}
       <Hero onNavigate={scrollToSection} onHeroComplete={setIsHeroComplete} />
 
       {/* Main flow items & Footer wrapped in a beautiful, transitionable motion layout */}

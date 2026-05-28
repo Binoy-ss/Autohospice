@@ -5,11 +5,24 @@ import gsap from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
 import { ArrowRight, Play, Sparkles } from 'lucide-react';
 
-const frameCount = 261;
-const frameUrls = Array.from({ length: frameCount }, (_, index) => {
-  const paddedIndex = String(index + 1).padStart(3, '0');
-  return `/assets/Cover frames/ezgif-frame-${paddedIndex}.jpg`;
+const frameModules = (
+  import.meta as ImportMeta & {
+    glob: (pattern: string, options: { eager: boolean; import: 'default' }) => Record<string, string>;
+  }
+).glob('/assets/Cover 2/frame_*.png', {
+  eager: true,
+  import: 'default'
 });
+
+const frameUrls = Object.entries(frameModules)
+  .sort(([fileA], [fileB]) => {
+    const indexA = Number.parseInt(fileA.match(/frame_(\d+)\.png$/)?.[1] ?? '0', 10);
+    const indexB = Number.parseInt(fileB.match(/frame_(\d+)\.png$/)?.[1] ?? '0', 10);
+    return indexA - indexB;
+  })
+  .map(([, frameUrl]) => frameUrl as string);
+
+const frameCount = Math.max(frameUrls.length, 1);
 
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
 
@@ -28,6 +41,7 @@ export default function Hero({ onNavigate, onHeroComplete }: HeroProps) {
   const animationFrameRef = useRef<number | null>(null);
   const lenisRef = useRef<Lenis | null>(null);
   const heroCompleteRef = useRef(false);
+  const isReadyRef = useRef(false);
   const [isReady, setIsReady] = useState(false);
   const [heroComplete, setHeroComplete] = useState(false);
 
@@ -88,29 +102,33 @@ export default function Hero({ onNavigate, onHeroComplete }: HeroProps) {
   useEffect(() => {
     let isMounted = true;
 
+    const preloadFrame = (url: string) =>
+      new Promise<HTMLImageElement>((resolve, reject) => {
+        const image = new Image();
+        image.decoding = 'async';
+        image.onload = () => resolve(image);
+        image.onerror = () => reject(new Error(`Failed to preload frame: ${url}`));
+        image.src = url;
+      });
+
     const preloadFrames = async () => {
-      const loadedFrames = await Promise.all(
-        frameUrls.map(
-          (url) =>
-            new Promise<HTMLImageElement>((resolve, reject) => {
-              const image = new Image();
-              image.decoding = 'async';
-              image.onload = () => resolve(image);
-              image.onerror = () => reject(new Error(`Failed to preload frame: ${url}`));
-              image.src = url;
-            })
-        )
-      );
+      const loadedResults = await Promise.allSettled(frameUrls.map((url) => preloadFrame(url)));
 
       if (!isMounted) return;
 
+      const loadedFrames = loadedResults
+        .filter((result): result is PromiseFulfilledResult<HTMLImageElement> => result.status === 'fulfilled')
+        .map((result) => result.value);
+
       frameImagesRef.current = loadedFrames;
+      isReadyRef.current = loadedFrames.length > 0;
       setIsReady(true);
       drawFrame();
     };
 
     preloadFrames().catch(() => {
       if (isMounted) {
+        isReadyRef.current = frameImagesRef.current.length > 0;
         setIsReady(true);
       }
     });
@@ -125,14 +143,13 @@ export default function Hero({ onNavigate, onHeroComplete }: HeroProps) {
     alpha: number,
     context: CanvasRenderingContext2D,
     width: number,
-    height: number,
-    useMobileBlur: boolean
+    height: number
   ) => {
     if (!image.complete) return;
 
     context.save();
     context.globalAlpha = alpha;
-    context.filter = useMobileBlur ? 'blur(0.25px)' : 'blur(0.35px)';
+    context.filter = 'none';
 
     const imageAspect = image.naturalWidth / image.naturalHeight;
     const containerAspect = width / height;
@@ -157,16 +174,16 @@ export default function Hero({ onNavigate, onHeroComplete }: HeroProps) {
 
   const drawFrame = () => {
     const canvas = canvasRef.current;
-    const context = canvas?.getContext('2d', { alpha: false, desynchronized: true });
+    const context = canvas?.getContext('2d', { alpha: true });
     if (!canvas || !context || frameImagesRef.current.length === 0) return;
 
     const rect = canvas.getBoundingClientRect();
-    const dpr = window.devicePixelRatio || 1;
-    const isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
-    const qualityScale = isMobile ? 0.72 : 1;
+    const isTouchDevice = window.matchMedia('(pointer: coarse)').matches;
+    const cappedDpr = Math.min(window.devicePixelRatio || 1, isTouchDevice ? 1.25 : 2);
+    const qualityScale = isTouchDevice ? 0.6 : 0.88;
 
-    const renderWidth = Math.max(1, Math.round(rect.width * dpr * qualityScale));
-    const renderHeight = Math.max(1, Math.round(rect.height * dpr * qualityScale));
+    const renderWidth = Math.max(1, Math.round(rect.width * cappedDpr * qualityScale));
+    const renderHeight = Math.max(1, Math.round(rect.height * cappedDpr * qualityScale));
 
     if (canvas.width !== renderWidth || canvas.height !== renderHeight) {
       canvas.width = renderWidth;
@@ -175,14 +192,11 @@ export default function Hero({ onNavigate, onHeroComplete }: HeroProps) {
 
     context.resetTransform();
     context.clearRect(0, 0, canvas.width, canvas.height);
-    context.fillStyle = '#000000';
-    context.fillRect(0, 0, canvas.width, canvas.height);
-
-    context.setTransform(dpr * qualityScale, 0, 0, dpr * qualityScale, 0, 0);
+    context.setTransform(cappedDpr * qualityScale, 0, 0, cappedDpr * qualityScale, 0, 0);
     context.imageSmoothingEnabled = true;
     context.imageSmoothingQuality = 'high';
 
-    const framePosition = currentFrameRef.current;
+    const framePosition = clamp(currentFrameRef.current, 0, frameCount - 1);
     const lowerFrame = Math.floor(framePosition);
     const upperFrame = Math.min(lowerFrame + 1, frameCount - 1);
     const blend = framePosition - lowerFrame;
@@ -194,11 +208,11 @@ export default function Hero({ onNavigate, onHeroComplete }: HeroProps) {
     const drawHeight = rect.height;
 
     if (lowerImage) {
-      drawFrameImage(lowerImage, 1 - blend, context, drawWidth, drawHeight, isMobile);
+      drawFrameImage(lowerImage, 1 - blend, context, drawWidth, drawHeight);
     }
 
     if (upperImage && upperFrame !== lowerFrame) {
-      drawFrameImage(upperImage, blend, context, drawWidth, drawHeight, isMobile);
+      drawFrameImage(upperImage, blend, context, drawWidth, drawHeight);
     }
   };
 
@@ -208,8 +222,9 @@ export default function Hero({ onNavigate, onHeroComplete }: HeroProps) {
         lenisRef.current.raf(time);
       }
 
-      if (isReady) {
-        currentFrameRef.current += (targetFrameRef.current - currentFrameRef.current) * 0.12;
+      if (isReadyRef.current) {
+        currentFrameRef.current += (targetFrameRef.current - currentFrameRef.current) * 0.1;
+        currentFrameRef.current = clamp(currentFrameRef.current, 0, frameCount - 1);
         drawFrame();
       }
 
@@ -223,19 +238,36 @@ export default function Hero({ onNavigate, onHeroComplete }: HeroProps) {
         cancelAnimationFrame(animationFrameRef.current);
       }
     };
-  }, [isReady]);
+  }, []);
+
+  useEffect(() => {
+    const heroSection = sectionRef.current;
+    if (!heroSection) return;
+
+    const resizeObserver = new ResizeObserver(() => {
+      ScrollTrigger.refresh(true);
+      drawFrame();
+    });
+
+    resizeObserver.observe(heroSection);
+
+    return () => {
+      resizeObserver.disconnect();
+    };
+  }, []);
 
   return (
     <section
       id="home"
       ref={sectionRef}
-      className="relative h-[250vh] w-full bg-black"
+      className="relative h-[250vh] w-full"
     >
-      <div className="sticky top-0 h-screen w-full overflow-hidden bg-black">
+      <div className="sticky top-0 h-screen w-full overflow-hidden">
         <canvas
           ref={canvasRef}
           className="absolute inset-0 h-full w-full"
-          style={{ transform: 'translateZ(0)', willChange: 'transform' }}
+          aria-hidden="true"
+          style={{ background: 'transparent', transform: 'translateZ(0)', willChange: 'transform' }}
         />
 
         <div className="absolute inset-0 z-20 flex items-center justify-start px-4 sm:px-6 lg:px-10">
@@ -246,7 +278,7 @@ export default function Hero({ onNavigate, onHeroComplete }: HeroProps) {
               filter: heroComplete ? 'blur(0px)' : 'blur(8px)'
             }}
             transition={{ duration: 1.1, ease: [0.16, 1, 0.3, 1] }}
-            className="max-w-3xl"
+            className="max-w-4xl pt-10 sm:pt-12 md:pt-14"
           >
             <motion.div
               initial={{ opacity: 0, y: 18 }}
@@ -258,7 +290,7 @@ export default function Hero({ onNavigate, onHeroComplete }: HeroProps) {
               ELITE AUTOMOTIVE HYGIENE
             </motion.div>
 
-            <div className="space-y-3">
+            <div className="space-y-4">
               <div className="flex flex-col text-left uppercase tracking-[0.16em] text-white">
                 {heroHeadline.map((line, lineIndex) => (
                   <div key={line} className="overflow-hidden leading-none">
@@ -277,8 +309,8 @@ export default function Hero({ onNavigate, onHeroComplete }: HeroProps) {
                             delay: 0.45 + lineIndex * 0.2 + letterIndex * 0.04,
                             ease: [0.16, 1, 0.3, 1]
                           }}
-                          className={`inline-block ${lineIndex === 1 ? 'text-[#D8FF00]' : ''}`}
-                          style={{ textShadow: lineIndex === 1 ? '0 0 20px rgba(216,255,0,0.35)' : undefined }}
+                          className={`inline-block text-[4.2rem] font-black leading-[0.78] tracking-[-0.04em] sm:text-[5.8rem] md:text-[7rem] lg:text-[8rem] ${lineIndex === 1 ? 'text-[#D8FF00]' : ''}`}
+                          style={{ textShadow: lineIndex === 1 ? '0 0 26px rgba(216,255,0,0.38)' : undefined }}
                         >
                           {letter}
                         </motion.span>
@@ -293,7 +325,7 @@ export default function Hero({ onNavigate, onHeroComplete }: HeroProps) {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: heroComplete ? 1 : 0, y: heroComplete ? 0 : 20 }}
               transition={{ delay: 0.68, duration: 0.8, ease: 'easeOut' }}
-              className="mt-6 max-w-xl text-sm text-gray-200 sm:text-base md:text-lg"
+              className="mt-6 max-w-2xl text-left text-sm font-medium text-gray-200 sm:text-base md:text-lg"
             >
               Premium Car Wash & Luxury Detailing Experience
             </motion.p>
@@ -322,15 +354,6 @@ export default function Hero({ onNavigate, onHeroComplete }: HeroProps) {
           </motion.div>
         </div>
 
-        <div className="absolute bottom-6 left-4 z-30 rounded-full border border-white/10 bg-black/35 px-3 py-2 text-[10px] uppercase tracking-[0.28em] text-gray-200 backdrop-blur-md sm:left-6">
-          Scroll to reveal the cinematic story
-        </div>
-
-        {!isReady && (
-          <div className="absolute inset-0 z-40 flex items-center justify-center text-[10px] uppercase tracking-[0.3em] text-white/70">
-            Loading cinematic sequence...
-          </div>
-        )}
       </div>
     </section>
   );
