@@ -1,0 +1,6 @@
+{
+  "name": "Auto Hospice",
+  "description": "Premium Car Wash & Luxury Detailing Experience. Deliver luxury wash, ceramic coating, paint protection, and premium detailing experiences.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
